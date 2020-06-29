@@ -45,13 +45,9 @@ import net.imglib2.Volatile;
 import net.imglib2.cache.iotiming.CacheIoTiming;
 import net.imglib2.cache.iotiming.IoStatistics;
 import net.imglib2.converter.Converter;
-import net.imglib2.img.array.ArrayImg;
-import net.imglib2.img.basictypeaccess.array.IntArray;
-import net.imglib2.type.numeric.ARGBType;
 import net.imglib2.type.operators.SetZero;
 import net.imglib2.util.Intervals;
 import net.imglib2.util.StopWatch;
-import net.imglib2.util.Util;
 import net.imglib2.view.Views;
 
 /**
@@ -139,7 +135,7 @@ public class VolatileHierarchyProjector< A extends Volatile< ? >, B extends SetZ
 	/**
 	 * Flag to indicate that someone is trying to {@link #cancel()} rendering.
 	 */
-	private final AtomicBoolean interrupted = new AtomicBoolean();
+	private final AtomicBoolean canceled = new AtomicBoolean();
 
 	public VolatileHierarchyProjector(
 			final List< ? extends RandomAccessible< A > > sources,
@@ -184,7 +180,7 @@ public class VolatileHierarchyProjector< A extends Volatile< ? >, B extends SetZ
 	@Override
 	public void cancel()
 	{
-		interrupted.set( true );
+		canceled.set( true );
 	}
 
 	@Override
@@ -240,7 +236,9 @@ public class VolatileHierarchyProjector< A extends Volatile< ? >, B extends SetZ
 	@Override
 	public boolean map( final boolean clearUntouchedTargetPixels )
 	{
-		interrupted.set( false );
+		if ( canceled.get() )
+			return false;
+
 		valid = false;
 
 		final StopWatch stopWatch = StopWatch.createAndStart();
@@ -281,7 +279,7 @@ public class VolatileHierarchyProjector< A extends Volatile< ? >, B extends SetZ
 				{
 					Thread.currentThread().interrupt();
 				}
-				if ( interrupted.get() )
+				if ( canceled.get() )
 					return false;
 				if ( numInvalidPixels.get() == 0 )
 					// if this pass was all valid
@@ -294,7 +292,7 @@ public class VolatileHierarchyProjector< A extends Volatile< ? >, B extends SetZ
 				ex.shutdown();
 		}
 
-		if ( clearUntouchedTargetPixels && !interrupted.get() )
+		if ( clearUntouchedTargetPixels && !canceled.get() )
 			clearUntouchedTargetPixels();
 
 		final long lastFrameTime = stopWatch.nanoTime();
@@ -305,7 +303,7 @@ public class VolatileHierarchyProjector< A extends Volatile< ? >, B extends SetZ
 
 		valid = numInvalidLevels == 0;
 
-		return !interrupted.get();
+		return !canceled.get();
 	}
 
 	/**
@@ -339,7 +337,7 @@ public class VolatileHierarchyProjector< A extends Volatile< ? >, B extends SetZ
 	 */
 	private void map( final byte resolutionIndex, final int startHeight, final int endHeight )
 	{
-		if ( interrupted.get() )
+		if ( canceled.get() )
 			return;
 
 		final RandomAccess< B > targetRandomAccess = target.randomAccess( target );
@@ -350,7 +348,7 @@ public class VolatileHierarchyProjector< A extends Volatile< ? >, B extends SetZ
 
 		for ( int y = startHeight; y < endHeight; ++y )
 		{
-			if ( interrupted.get() )
+			if ( canceled.get() )
 				return;
 
 			smin[ 1 ] = y;
