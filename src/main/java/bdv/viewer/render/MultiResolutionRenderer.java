@@ -45,6 +45,7 @@ import net.imglib2.ui.PainterThread;
 import net.imglib2.ui.RenderTarget;
 import net.imglib2.util.Intervals;
 
+
 /**
  * A renderer that uses a coarse-to-fine rendering scheme. First, a small target
  * image at a fraction of the canvas resolution is rendered. Then, increasingly
@@ -68,13 +69,10 @@ import net.imglib2.util.Intervals;
  * scale is currently rendering, {@link #requestRepaint() repaint request} will
  * cancel rendering, such that display remains interactive.
  * <p>
- * The renderer tries to maintain a per-frame rendering time close to a desired
- * number of {@code targetRenderNanos} nanoseconds. If the rendering time (in
- * nanoseconds) for the (currently) highest scaled screen image is above this
- * threshold, a coarser screen scale is chosen as the highest screen scale to
- * use. Similarly, if the rendering time for the (currently) second-highest
- * scaled screen image is below this threshold, this finer screen scale chosen
- * as the highest screen scale to use.
+ * The renderer tries to maintain a per-frame rendering time close to
+ * {@code targetRenderNanos} nanoseconds. The current highest screen scale is
+ * chosen to match this time based on per-output-pixel time measured in previous
+ * frames.
  * <p>
  * The renderer uses multiple threads (if desired).
  * <p>
@@ -104,10 +102,18 @@ public class MultiResolutionRenderer
 	private final PainterThread painterThread;
 
 	/**
-	 * Currently active projector, used to re-paint the display. It maps the
-	 * source data to {@code ©screenImages}.
+	 * Creates projectors for rendering current {@code ViewerState} to a
+	 * {@code screenImage}.
 	 */
-	private VolatileProjector projector;
+	private final ProjectorFactory projectorFactory;
+
+	/**
+	 * Controls IO budgeting and fetcher queue.
+	 */
+	private final CacheControl cacheControl;
+
+	// TODO: should be settable
+	private final long[] iobudget = new long[] { 100l * 1000000l,  10l * 1000000l };
 
 	/**
 	 * Scale factors from the {@link #display viewer canvas} to the
@@ -154,6 +160,9 @@ public class MultiResolutionRenderer
 
 	private int screenH;
 
+	/**
+	 * Maintains arrays for intermediate per-source render images and masks.
+	 */
 	private final RenderStorage renderStorage;
 
 	/**
@@ -171,26 +180,28 @@ public class MultiResolutionRenderer
 	private final MovingAverage renderNanosPerPixelAndSource;
 
 	/**
-	 * The index of the screen scale of the {@link #projector current
-	 * projector}.
+	 * Currently active projector, used to re-paint the display. It maps the
+	 * source data to {@code ©screenImages}.
+	 */
+	private VolatileProjector projector;
+
+	/**
+	 * Screen scale of the last successful (not cancelled) rendering pass in
+	 * full-frame mode.
 	 */
 	private int currentScreenScaleIndex;
 
 	/**
-	 * The index of the screen scale which should be rendered next.
+	 * The index of the screen scale which should be rendered next in full-frame
+	 * mode.
 	 */
 	private int requestedScreenScaleIndex;
 
 	/**
-	 * The index of the coarsest screen scale currently used.
-	 * Rendering at finer screen scales may be cancelled.
-	 */
-	private int maxScreenScaleIndex;
-
-	/**
 	 * Whether the current rendering operation may be cancelled (to start a new
 	 * one). Rendering may be cancelled unless we are rendering at the
-	 * {@link #maxScreenScaleIndex coarsest screen scale}.
+	 * (estimated) coarsest screen scale meeting the rendering time
+	 * {@link #targetRenderNanos threshold}.
 	 */
 	private boolean renderingMayBeCancelled;
 
@@ -205,24 +216,31 @@ public class MultiResolutionRenderer
 	private int currentNumVisibleSources;
 
 	/**
-	 * Creates projectors for rendering current {@code ViewerState} to a
-	 * {@code screenImage}.
-	 */
-	private final ProjectorFactory projectorFactory;
-
-	/**
-	 * Controls IO budgeting and fetcher queue.
-	 */
-	private final CacheControl cacheControl;
-
-	/**
-	 * Whether a repaint was {@link #requestRepaint() requested}. This will
+	 * Whether a full repaint was {@link #requestRepaint() requested}. This will
 	 * cause {@link CacheControl#prepareNextFrame()}.
 	 */
 	private boolean newFrameRequest;
 
-	// TODO: should be settable
-	private final long[] iobudget = new long[] { 100l * 1000000l,  10l * 1000000l };
+	/**
+	 * If {@code true}, then we are painting intervals currently.
+	 * If {@code false}, then we are painting full frames.
+	 */
+	private boolean intervalMode;
+
+	/**
+	 * Screen scale of the last successful (not cancelled) rendering pass in
+	 * interval mode.
+	 */
+	private int currentIntervalScaleIndex;
+
+	private int requestedIntervalScaleIndex;
+
+	/**
+	 * Whether repainting of an interval was {@link #requestRepaint(Interval)
+	 * requested}. This will cause {@link CacheControl#prepareNextFrame()}.
+	 * Pending interval requests are obsoleted by full repaint requests.
+	 */
+	private boolean newIntervalRequest;
 
 	/**
 	 * @param display
@@ -277,8 +295,7 @@ public class MultiResolutionRenderer
 		renderNanosPerPixelAndSource = new MovingAverage( 3 );
 		renderNanosPerPixelAndSource.init( 500 );
 
-		maxScreenScaleIndex = screenScales.length - 1;
-		requestedScreenScaleIndex = maxScreenScaleIndex;
+		requestedScreenScaleIndex = screenScales.length - 1;
 		renderingMayBeCancelled = false;
 		this.cacheControl = cacheControl;
 		newFrameRequest = false;
@@ -335,9 +352,15 @@ public class MultiResolutionRenderer
 				newFrameRequest = false;
 				intervalMode = false;
 			}
-			paintInterval = intervalMode;
+
 			newInterval = newIntervalRequest;
-			newIntervalRequest = false;
+			if ( newInterval )
+			{
+				newIntervalRequest = false;
+				intervalMode = true;
+			}
+
+			paintInterval = intervalMode;
 		}
 
 		if ( paintInterval )
@@ -348,8 +371,7 @@ public class MultiResolutionRenderer
 			cacheControl.prepareNextFrame();
 			currentViewerState = viewerState.snapshot();
 			currentNumVisibleSources = currentViewerState.getVisibleAndPresentSources().size();
-			maxScreenScaleIndex = suggestScreenScale( new FinalDimensions( screenW, screenH ), currentNumVisibleSources );
-			requestedScreenScaleIndex = maxScreenScaleIndex;
+			requestedScreenScaleIndex = suggestScreenScale( new FinalDimensions( screenW, screenH ), currentNumVisibleSources );
 		}
 
 		final boolean createProjector = newFrame || ( requestedScreenScaleIndex != currentScreenScaleIndex );
@@ -376,7 +398,7 @@ public class MultiResolutionRenderer
 				renderStorage.checkRenewData( screenScales[ 0 ].w, screenScales[ 0 ].h, currentNumVisibleSources );
 				projector = createProjector( currentViewerState, requestedScreenScaleIndex, renderResult.getScreenImage(), 0, 0 );
 				requestNewFrameIfIncomplete = projectorFactory.requestNewFrameIfIncomplete();
-				renderingMayBeCancelled = ( requestedScreenScaleIndex < maxScreenScaleIndex );
+				renderingMayBeCancelled = !newFrame;
 			}
 			p = projector;
 		}
@@ -407,7 +429,7 @@ public class MultiResolutionRenderer
 				// TODO else renderResult.setUpdated();
 
 				if ( currentScreenScaleIndex > 0 )
-					requestRepaint( currentScreenScaleIndex - 1 );
+					iterateRepaint( currentScreenScaleIndex - 1 );
 				else if ( p.isValid() )
 				{
 					// indicate that rendering is complete
@@ -427,12 +449,26 @@ public class MultiResolutionRenderer
 					if( requestNewFrameIfIncomplete )
 						requestRepaint();
 					else
-						requestRepaint( currentScreenScaleIndex );
+						iterateRepaint( currentScreenScaleIndex );
 				}
 			}
 		}
 
 		return success;
+	}
+
+	/**
+	 * Request a repaint of the display from the painter thread, setting
+	 * {@code requestedScreenScaleIndex} to the specified
+	 * {@code screenScaleIndex}. This is used to repaint the
+	 * {@code currentViewerState} in a loop, until everything is painted at
+	 * highest resolution from valid data (or painting is interrupted by a new
+	 * "real" {@link #requestRepaint()}.
+	 */
+	private void iterateRepaint( final int screenScaleIndex )
+	{
+		requestedScreenScaleIndex = screenScaleIndex;
+		painterThread.requestRepaint();
 	}
 
 	/**
@@ -447,20 +483,6 @@ public class MultiResolutionRenderer
 		newFrameRequest = true;
 				requestedScreenInterval = null;
 				intervalMode = false;
-		painterThread.requestRepaint();
-	}
-
-	/**
-	 * Request a repaint of the display from the painter thread, setting
-	 * {@code requestedScreenScaleIndex} to the specified
-	 * {@code screenScaleIndex}. This is used to repaint the
-	 * {@code currentViewerState} in a loop, until everything is painted at
-	 * highest resolution from valid data (or painting is interrupted by a new
-	 * "real" {@link #requestRepaint()}.
-	 */
-	private void requestRepaint( final int screenScaleIndex )
-	{
-		requestedScreenScaleIndex = screenScaleIndex;
 		painterThread.requestRepaint();
 	}
 
@@ -527,12 +549,7 @@ public class MultiResolutionRenderer
 	// =========== intervals =============
 
 	private Interval requestedScreenInterval;
-	private boolean intervalMode;
-	private boolean newIntervalRequest;
 	private RenderResult currentRenderResult;
-	private int requestedIntervalScaleIndex;
-	private int currentIntervalScaleIndex;
-	private int maxIntervalScaleIndex;
 
 	public static class IntervalRenderData
 	{
@@ -561,8 +578,7 @@ public class MultiResolutionRenderer
 		if ( newInterval )
 		{
 			cacheControl.prepareNextFrame();
-			maxIntervalScaleIndex = Math.max( currentScreenScaleIndex, suggestScreenScale( requestedScreenInterval, currentNumVisibleSources ) );
-			requestedIntervalScaleIndex = maxIntervalScaleIndex;
+			requestedIntervalScaleIndex = Math.max( currentScreenScaleIndex, suggestScreenScale( requestedScreenInterval, currentNumVisibleSources ) );
 		}
 
 		final boolean createProjector = newInterval || ( requestedIntervalScaleIndex != currentIntervalScaleIndex );
@@ -589,7 +605,7 @@ public class MultiResolutionRenderer
 				final double ty = interval.min( 1 ) * relativeScale;
 				intervalRenderData = new IntervalRenderData( targetInterval, tx, ty );
 
-				renderingMayBeCancelled = ( requestedIntervalScaleIndex < maxIntervalScaleIndex );
+				renderingMayBeCancelled = !newInterval;
 			}
 			p = projector;
 		}
@@ -606,13 +622,14 @@ public class MultiResolutionRenderer
 				currentRenderResult.patch( intervalResult, intervalRenderData.targetInterval, intervalRenderData.tx, intervalRenderData.ty );
 
 				if ( currentIntervalScaleIndex > currentScreenScaleIndex )
-					requestRepaintInterval( currentIntervalScaleIndex - 1 );
+					iterateRepaintInterval( currentIntervalScaleIndex - 1 );
 				else if ( p.isValid() )
 				{
 					if ( requestedScreenScaleIndex >= 0 )
 					{
 						// go back to "normal" rendering
 						intervalMode = false;
+						renderingMayBeCancelled = false;
 						if ( requestedScreenScaleIndex == currentScreenScaleIndex )
 							++currentScreenScaleIndex;
 						painterThread.requestRepaint();
@@ -629,12 +646,18 @@ public class MultiResolutionRenderer
 						// restore interrupted state
 						Thread.currentThread().interrupt();
 					}
-					requestRepaintInterval( currentIntervalScaleIndex );
+					iterateRepaintInterval( currentIntervalScaleIndex );
 				}
 			}
 		}
 
 		return success;
+	}
+
+	private void iterateRepaintInterval( final int intervalScaleIndex )
+	{
+		requestedIntervalScaleIndex = intervalScaleIndex;
+		painterThread.requestRepaint();
 	}
 
 	private Interval scaleScreenInterval( final Interval requestedScreenInterval, final int intervalScaleIndex )
@@ -652,15 +675,9 @@ public class MultiResolutionRenderer
 		);
 	}
 
-	private void requestRepaintInterval( final int intervalScaleIndex )
-	{
-		requestedIntervalScaleIndex = intervalScaleIndex;
-		painterThread.requestRepaint();
-	}
-
 	public synchronized void requestRepaint( final Interval screenInterval )
 	{
-		if ( renderingMayBeCancelled )
+		if ( renderingMayBeCancelled || intervalMode )
 		{
 			if ( projector != null )
 				projector.cancel();
@@ -670,8 +687,6 @@ public class MultiResolutionRenderer
 			painterThread.requestRepaint();
 		}
 		else
-		{
 			requestRepaint();
-		}
 	}
 }
