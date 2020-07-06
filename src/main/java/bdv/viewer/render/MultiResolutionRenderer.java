@@ -124,14 +124,6 @@ public class MultiResolutionRenderer
 	private final RenderStorage renderStorage;
 
 	/**
-	 * Target rendering time in nanoseconds. The rendering time for the coarsest
-	 * rendered scale should be below this threshold. After the coarsest scale,
-	 * increasingly finer scales are rendered, but these render passes may be
-	 * canceled (while the coarsest may not).
-	 */
-	private final long targetRenderNanos;
-
-	/**
 	 * Estimate of the time it takes to render one screen pixel from one source,
 	 * in nanoseconds.
 	 */
@@ -158,8 +150,7 @@ public class MultiResolutionRenderer
 	/**
 	 * Whether the current rendering operation may be cancelled (to start a new
 	 * one). Rendering may be cancelled unless we are rendering at the
-	 * (estimated) coarsest screen scale meeting the rendering time
-	 * {@link #targetRenderNanos threshold}.
+	 * (estimated) coarsest screen scale meeting the rendering time threshold.
 	 */
 	private boolean renderingMayBeCancelled;
 
@@ -245,10 +236,9 @@ public class MultiResolutionRenderer
 		this.painterThread = painterThread;
 		projector = null;
 		currentScreenScaleIndex = -1;
-		screenScales = new ScreenScales( screenScaleFactors );
+		screenScales = new ScreenScales( screenScaleFactors, targetRenderNanos );
 		renderStorage = new RenderStorage();
 
-		this.targetRenderNanos = targetRenderNanos;
 		renderNanosPerPixelAndSource = new MovingAverage( 3 );
 		renderNanosPerPixelAndSource.init( 500 );
 
@@ -311,7 +301,7 @@ public class MultiResolutionRenderer
 			currentViewerState = viewerState.snapshot();
 			currentNumVisibleSources = currentViewerState.getVisibleAndPresentSources().size();
 			final double renderNanosPerPixel = renderNanosPerPixelAndSource.getAverage() * currentNumVisibleSources;
-			requestedScreenScaleIndex = screenScales.suggestScreenScale( renderNanosPerPixel, targetRenderNanos );
+			requestedScreenScaleIndex = screenScales.suggestScreenScale( renderNanosPerPixel );
 		}
 
 		final boolean createProjector = newFrame || ( requestedScreenScaleIndex != currentScreenScaleIndex );
@@ -521,7 +511,7 @@ public class MultiResolutionRenderer
 			{
 				cacheControl.prepareNextFrame();
 				final double renderNanosPerPixel = renderNanosPerPixelAndSource.getAverage() * currentNumVisibleSources;
-				requestedIntervalScaleIndex = screenScales.suggestIntervalScreenScale( renderNanosPerPixel, targetRenderNanos, currentScreenScaleIndex );
+				requestedIntervalScaleIndex = screenScales.suggestIntervalScreenScale( renderNanosPerPixel, currentScreenScaleIndex );
 			}
 
 			createProjector = newInterval || ( requestedIntervalScaleIndex != currentIntervalScaleIndex );
