@@ -29,6 +29,7 @@
  */
 package bdv.viewer;
 
+import bdv.TransformEventHandler;
 import bdv.ui.CardPanel;
 import bdv.ui.BdvDefaultCards;
 import bdv.ui.splitpanel.SplitPanel;
@@ -48,7 +49,6 @@ import org.scijava.ui.behaviour.util.InputActionBindings;
 import org.scijava.ui.behaviour.util.TriggerBehaviourBindings;
 
 import bdv.cache.CacheControl;
-import net.imglib2.ui.TransformEventHandler;
 import net.imglib2.ui.util.GuiUtil;
 
 /**
