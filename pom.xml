@@ -134,13 +134,15 @@
 		<package-name>bdv</package-name>
 		<license.licenseName>bsd_2</license.licenseName>
 		<license.copyrightOwners>BigDataViewer developers.</license.copyrightOwners>
-		<enforcer.skip>true</enforcer.skip>
 
 		<imglib2.version>5.9.0</imglib2.version>
 		<imglib2-cache.version>1.0.0-beta-13</imglib2-cache.version>
 		<spim_data.version>2.2.3</spim_data.version>
 		<ui-behaviour.version>2.0.1</ui-behaviour.version>
-		<miglayout-swing.version>5.2</miglayout-swing.version>
+
+		<scijava-listeners.version>1.0.0-beta-3</scijava-listeners.version>
+		<n5.version>2.1.6</n5.version>
+		<n5-imglib2.version>3.4.1</n5-imglib2.version>
 
 		<!-- NB: Deploy releases to the SciJava Maven repository. -->
 		<releaseProfiles>deploy-to-scijava</releaseProfiles>
@@ -193,22 +195,22 @@
 		<dependency>
 			<groupId>org.scijava</groupId>
 			<artifactId>scijava-listeners</artifactId>
-			<version>1.0.0-beta-3</version>
+			<version>${scijava-listeners.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>org.janelia.saalfeldlab</groupId>
 			<artifactId>n5-imglib2</artifactId>
-			<version>3.4.1</version>
+			<version>${n5-imglib2.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>org.janelia.saalfeldlab</groupId>
 			<artifactId>n5</artifactId>
-			<version>2.1.6</version>
+			<version>${n5.version}</version>
 		</dependency>
 		<dependency>
 			<groupId>com.miglayout</groupId>
-			<artifactId>miglayout-swing</artifactId>
-			<version>${miglayout-swing.version}</version>
+			<artifactId>miglayout</artifactId>
+			<classifier>swing</classifier>
 		</dependency>
 
 		<!-- test dependencies -->
