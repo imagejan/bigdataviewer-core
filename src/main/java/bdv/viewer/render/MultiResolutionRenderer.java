@@ -29,6 +29,7 @@
  */
 package bdv.viewer.render;
 
+import bdv.viewer.BasicViewerState;
 import bdv.viewer.RequestRepaint;
 import java.util.concurrent.ExecutorService;
 
@@ -365,6 +366,11 @@ public class MultiResolutionRenderer
 		final int screenH = display.getHeight();
 		if ( screenW <= 0 || screenH <= 0 )
 			return false;
+
+		// TODO (SP): We have to find an elegant way for how to get the canvas size into the viewerState method
+		// Also, this value is sometimes smaller than actual screen size, why is that?
+		BasicViewerState.w = screenW;
+		BasicViewerState.h = screenH;
 
 		final boolean newFrame;
 		final boolean newInterval;

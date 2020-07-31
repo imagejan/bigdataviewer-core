@@ -1,22 +1,5 @@
 package bdv.viewer;
 
-import bdv.util.Affine3DHelpers;
-import bdv.util.WrappedList;
-import gnu.trove.map.TObjectIntMap;
-import gnu.trove.map.hash.TObjectIntHashMap;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Set;
-import net.imglib2.realtransform.AffineTransform3D;
-import org.scijava.listeners.Listeners;
-
 import static bdv.viewer.ViewerStateChange.CURRENT_GROUP_CHANGED;
 import static bdv.viewer.ViewerStateChange.CURRENT_SOURCE_CHANGED;
 import static bdv.viewer.ViewerStateChange.CURRENT_TIMEPOINT_CHANGED;
@@ -33,6 +16,27 @@ import static bdv.viewer.ViewerStateChange.VIEWER_TRANSFORM_CHANGED;
 import static bdv.viewer.ViewerStateChange.VISIBILITY_CHANGED;
 import static gnu.trove.impl.Constants.DEFAULT_CAPACITY;
 import static gnu.trove.impl.Constants.DEFAULT_LOAD_FACTOR;
+
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Set;
+
+import org.scijava.listeners.Listeners;
+
+import bdv.util.Affine3DHelpers;
+import bdv.util.MipmapTransforms;
+import bdv.util.WrappedList;
+import gnu.trove.map.TObjectIntMap;
+import gnu.trove.map.hash.TObjectIntHashMap;
+import net.imglib2.FinalRealInterval;
+import net.imglib2.realtransform.AffineTransform3D;
 
 /**
  * Maintains the BigDataViewer state and implements {@link ViewerState} to
@@ -559,6 +563,49 @@ public class BasicViewerState implements ViewerState
 		return isSourceVisible( source ) && source.getSpimSource().isPresent( currentTimepoint );
 	}
 
+	// TODO (SP): We have to find an elegant way for how to get the canvas size into the viewerState method
+	public static int w = -1, h = -1;
+
+	// TODO: stop rendering 30 px away from the border in XY to visualize the results
+	public static int border = 30;
+
+	public static boolean isRenderedToScreen(
+			final Source< ? > source,
+			final AffineTransform3D screenTransform,
+			final int timepoint,
+			final int screenW,
+			final int screenH )
+	{
+		// static variables not set properly
+		if ( screenW <= 0 || screenH <= 0 )
+			return true;
+
+		final int mipmapIndex =
+				MipmapTransforms.getBestMipMapLevel( screenTransform, source, timepoint );
+
+		final AffineTransform3D sourceToScreen = new AffineTransform3D();
+		source.getSourceTransform( timepoint, mipmapIndex, sourceToScreen );
+		sourceToScreen.preConcatenate( screenTransform );
+
+		// now test overlaps ...
+		final FinalRealInterval interval = new FinalRealInterval( source.getSource( timepoint, mipmapIndex ) );
+		final FinalRealInterval bb = sourceToScreen.estimateBounds( interval );
+
+		//System.out.println( "\n" + "w=" + screenW  + ", h=" + screenH );
+		//System.out.print( bb.realMin( 0 ) + " " + bb.realMin( 1 ) + " " + bb.realMin( 2 ) + " > " + bb.realMax( 0 ) + " " + bb.realMax( 1 ) + " " + bb.realMax( 2 ) + " >> ");
+
+		if ( bb.realMax( 0 ) < border && bb.realMin( 0 ) < border || bb.realMax( 0 ) >= screenW - border && bb.realMin( 0 ) >= screenW - border )
+			return false;
+
+		if ( bb.realMax( 1 ) < border && bb.realMin( 1 ) < border || bb.realMax( 1 ) >= screenH - border && bb.realMin( 1 ) >= screenH - border )
+			return false;
+
+		if ( bb.realMax( 2 ) < 0 && bb.realMin( 2 ) < 0 || bb.realMax( 2 ) >= 1 && bb.realMin( 2 ) >= 1 )
+			return false;
+
+		return true;
+	}
+
 	/**
 	 * Get the set of visible sources.
 	 * <p>
@@ -598,7 +645,26 @@ public class BasicViewerState implements ViewerState
 				visible.addAll( groupData.get( group ).sources );
 			break;
 		}
-		return visible;
+
+		final AffineTransform3D screenTransform = this.getViewerTransform();
+		final int timepoint = getCurrentTimepoint();
+
+		// TODO (SP): do we need to do this test also for isSourceVisible() as well
+
+		final Set< SourceAndConverter< ? > > stillVisible = new HashSet<>();
+
+		for ( final SourceAndConverter< ? > sac : visible )
+		{
+			// TODO (SP): how big is the canvas???
+			final boolean isRendered = isRenderedToScreen( sac.getSpimSource(), screenTransform, timepoint, w, h );
+
+			//System.out.println( isRendered );
+
+			if ( isRendered )
+				stillVisible.add( sac );
+		}
+
+		return stillVisible;
 	}
 
 	/**
